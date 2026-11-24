@@ -10,4 +10,4 @@ Devin plugin `session-context-analysis`: measures a Devin session's context wind
 
 ## Install
 
-Install this directory as a Devin plugin (e.g. `manage_plugin` kind=plugin with this repo as the source), then ask Devin to analyse a session's context.
+This directory uses the Devin plugin layout (`.devin-plugin/plugin.json` + `skills/`), so it can be uploaded as a personal or org plugin. Then ask Devin to analyse a session's context.

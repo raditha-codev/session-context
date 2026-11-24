@@ -3,7 +3,8 @@
 Usage: python3 analyze.py <session-id> [--repo | --no-repo]
 --repo / --no-repo override the repo-work guess (git tools called) used for the AGENTS.md advisory.
 Prints Markdown tables (step table trimmed to notable steps for long sessions),
-writes the full report to ~/session-context-<id>.md and the chart to ~/session-context-<id>.svg.
+writes the full report and the chart (session-context-<id>.md / .html, an SVG chart wrapped in HTML with hover tooltips) to ~/.cache/session-context/,
+keeping files for only the KEEP most recently analysed sessions.
 """
 import json, math, os, sys
 from datetime import datetime, timezone
@@ -11,7 +12,8 @@ from html import escape as esc
 
 SESSION_ID = sys.argv[1] if sys.argv[1].startswith("devin-") else "devin-" + sys.argv[1]
 SID = SESSION_ID.removeprefix("devin-")
-data = json.load(open(os.path.expanduser(f"~/session-context-{SID}.json")))
+OUT, KEEP = os.path.expanduser("~/.cache/session-context"), 5
+data = json.load(open(f"{OUT}/session-context-{SID}.json"))
 events = sorted(data["events"], key=lambda e: e["timestamp"])
 repo_flag = "--repo" in sys.argv or ("--no-repo" not in sys.argv and None)
 if not events:
@@ -58,7 +60,7 @@ for i, e in enumerate(events):
     steps.append((i + 1, clean[i], dt, kind, T[i]))
     notable = n_ev <= 30 or i in (0, n_ev - 1) or bool(note) or abs(dt) >= max(2000, 0.05 * max(T))
     print(f"| {i+1} | {e['timestamp'][11:19]} | {T[i]:,} | {dt:+,} | {B[i]:,} | {db:+,} | {', '.join(f'{k}×{v}' for k, v in newc.items())} | {note} |", brief=notable)
-if n_ev > 30: print(f"\n(Only notable steps shown; all {n_ev} steps are in ~/session-context-{SID}.md.)")
+if n_ev > 30: print(f"\n(Only notable steps shown; all {n_ev} steps are in {OUT}/session-context-{SID}.md.)")
 # ACU series: running total logged at each user message, plus the total at fetch time.
 ts = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
 acu_pts = sorted((ts(t), a) for t, a in data.get("acu_points", []))
@@ -230,7 +232,26 @@ for i, (col, lab, v, extra) in enumerate(rows):
 H = top2 + bh + 28 + len(rows) * 22 + 10
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '
        f'font-family="Inter, -apple-system, Segoe UI, Helvetica, Arial, sans-serif"><rect width="100%" height="100%" fill="#FFFFFF"/>' + "".join(out) + "</svg>")
-path = os.path.expanduser(f"~/session-context-{SID}.svg")
-open(path, "w").write(svg)
+# Wrapped in HTML: the session sidebar shows a bare SVG as a static image, so <title> tooltips never fire there.
+TIP_JS = ("const t=document.getElementById('tip');document.querySelectorAll('svg title').forEach(n=>{const e=n.parentNode,s=n.textContent;n.remove();"
+          "e.style.cursor='default';e.addEventListener('mousemove',v=>{t.textContent=s;t.style.display='block';"
+          "t.style.left=Math.min(v.clientX+12,innerWidth-t.offsetWidth-4)+'px';t.style.top=(v.clientY+14)+'px'});"
+          "e.addEventListener('mouseleave',()=>t.style.display='none')});")
+html = (f'<!doctype html><html><head><meta charset="utf-8"><title>Session context — {SESSION_ID[-8:]}</title><style>'
+        'body{margin:0;background:#fff}svg{display:block;width:100%;height:auto;max-width:' + str(W) + 'px}'
+        '#tip{position:fixed;display:none;pointer-events:none;background:#0F172A;color:#fff;font:12px Inter,-apple-system,Segoe UI,Helvetica,Arial,sans-serif;'
+        'padding:4px 8px;border-radius:4px;white-space:nowrap;z-index:9}</style></head><body>'
+        + svg + f'<div id="tip"></div><script>{TIP_JS}</script></body></html>')
+path = f"{OUT}/session-context-{SID}.html"
+open(path, "w").write(html)
 print(f"\nChart written to {path}")
-open(os.path.expanduser(f"~/session-context-{SID}.md"), "w").write("\n".join(_full) + "\n")
+open(f"{OUT}/session-context-{SID}.md", "w").write("\n".join(_full) + "\n")
+
+# Keep only the KEEP most recently analysed sessions so repeated runs can't fill the disk.
+groups = {}
+for f in os.listdir(OUT):
+    if f.startswith("session-context-"):
+        fp = os.path.join(OUT, f); g = groups.setdefault(f.removeprefix("session-context-").split(".")[0], [])
+        g.append((os.path.getmtime(fp), fp))
+for sid, files in sorted(groups.items(), key=lambda kv: -max(m for m, _ in kv[1]))[KEEP:]:
+    for _, fp in files: os.remove(fp)

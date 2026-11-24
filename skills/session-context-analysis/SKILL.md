@@ -10,15 +10,15 @@ Use when asked how big a session's context is, what fills it, or why it grew. Wo
 ## Steps
 
 1. Get the session ID (`devin-...`; for the current session use the `devin_id` from your identity block).
-2. **Fetch** with `scripted_tools`: run the script below inline, replacing `SESSION_ID`. It saves the events to `~/session-context-<id>.json` and prints only a count, so raw events never enter your context. (`scripted_tools` only allows tool calls in inline code, which is why this part stays here.)
+2. **Fetch** with `scripted_tools`: run the script below inline, replacing `SESSION_ID`. It saves the events to `~/.cache/session-context/session-context-<id>.json` and prints only a count, so raw events never enter your context. (`scripted_tools` only allows tool calls in inline code, which is why this part stays here.)
 3. **Analyse** with `exec`; the analysis code ships next to this file and is not read into context:
 
    ```bash
    python3 "$(find /opt/.devin/plugins_cache -path '*skills/session-context-analysis/analyze.py' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)" <session-id>
    ```
 
-   It prints Markdown tables (for sessions over 30 steps, only notable steps), writes the full report to `~/session-context-<id>.md` and the chart to `~/session-context-<id>.svg`. Do not `cat` analyze.py.
-4. Send the tables in `message_user` and attach only the SVG (it renders inline and shows exact counts on hover). Do not also attach a PNG or screenshot of it. Add the accuracy caveats below and label measured vs inferred numbers. Read the .md only if the user asks about a step that was left out.
+   It prints Markdown tables (for sessions over 30 steps, only notable steps), writes the full report and chart to `~/.cache/session-context/session-context-<id>.md` and `.html` (an SVG chart wrapped in HTML so hover tooltips work in the sidebar). It keeps files for only the 5 most recently analysed sessions and deletes older ones. Do not `cat` analyze.py.
+4. Send the tables in `message_user` and attach only the .html chart (it opens in the sidebar and shows exact counts on hover). Attach nothing else: no .md, .json, PNG or screenshot. Add the accuracy caveats below and label measured vs inferred numbers. Read the .md only if the user asks about a step that was left out.
 5. Before explaining a spike or drop, read the step's Note and "Tools called" columns. Never call a drop a summary, or a jump a tool load, unless the script labels it so.
 
 ## Fetch script
@@ -49,7 +49,8 @@ for i in range(0, len(acu_ids), 20):
 fetched_at = datetime.now(timezone.utc).isoformat()
 info = await tools.devin_session_interact(action="get", session_id=SESSION_ID)
 acus = re.search(r"acus_consumed: ([\d.]+)", info)
-path = os.path.expanduser(f"~/session-context-{SESSION_ID.removeprefix('devin-')}.json")
+os.makedirs(os.path.expanduser("~/.cache/session-context"), exist_ok=True)
+path = os.path.expanduser(f"~/.cache/session-context/session-context-{SESSION_ID.removeprefix('devin-')}.json")
 json.dump({"events": events, "acus": float(acus.group(1)) if acus else None, "acu_points": acu_points, "fetched_at": fetched_at}, open(path, "w"))
 print(f"{len(events)} snapshots saved to {path}")
 ```

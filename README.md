@@ -1,6 +1,6 @@
 # session-context
 
-Devin plugin `session-context-analysis`: measures a Devin session's context window (token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs over time) and draws a colour-coded SVG chart from the session's `context_growth_update` and `acu_consumption_at_last_user_interaction` events.
+Devin plugin `session-context-analysis`: measures a Devin session's context window (token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs over time) and draws a colour-coded SVG chart (wrapped in HTML, with hover tooltips) from the session's `context_growth_update` and `acu_consumption_at_last_user_interaction` events.
 
 ## Layout
 

@@ -40,12 +40,22 @@ def analyze(events, **extra):
 
 
 class AnalyzerTest(unittest.TestCase):
-    def test_rules_and_gap_remain_unattributed(self):
+    def test_rules_and_remainder_are_shown_as_bytes(self):
         report, svg = analyze([snapshot(1, 20000, 90000), snapshot(2, 21000, 95000, 2713)])
         self.assertIn("| 2 | 2,713 | +2,713 |", report)
         self.assertIn("step 2 -2,750.", report)
         self.assertNotIn("AGENTS.md", report)
-        self.assertIn("unattributed token gap: -2,750", "".join(svg.itertext()))
+        chart_text = "".join(svg.itertext())
+        self.assertIn("Other context (e.g. conversation and tool activity): 92,287 bytes (97%)", chart_text)
+        self.assertIn("rules (all sources): 2,713 bytes (3%)", chart_text)
+        self.assertNotIn("-2,750", chart_text)
+
+    def test_positive_token_estimate_difference_stays_out_of_source_shares(self):
+        report, svg = analyze([snapshot(1, 40000, 95000, 2713)])
+        self.assertIn("step 1 +16,250.", report)
+        chart_text = "".join(svg.itertext())
+        self.assertIn("Other context (e.g. conversation and tool activity): 92,287 bytes (97%)", chart_text)
+        self.assertNotIn("16,250", chart_text)
 
     def test_flagged_spike_preserves_reading_and_both_deltas(self):
         report, svg = analyze([

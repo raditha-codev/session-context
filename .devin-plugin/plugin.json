@@ -1,6 +1,6 @@
 {
   "name": "session-context-analysis",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "description": "Analyse a Devin session's logged context growth and ACUs with an interactive HTML chart.",
   "platforms": ["cloud"]
 }

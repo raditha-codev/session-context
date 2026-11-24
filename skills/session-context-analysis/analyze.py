@@ -17,6 +17,11 @@ def utc_time(timestamp, fmt="%Y-%m-%d %H:%M:%S"):
     return datetime.fromtimestamp(timestamp, timezone.utc).strftime(fmt)
 
 
+def byte_share(size, total):
+    percent = 100 * size / max(1, total)
+    return "<1%" if 0 < percent < 0.5 else f"{percent:.0f}%"
+
+
 SESSION_ID = sys.argv[1] if sys.argv[1].startswith("devin-") else "devin-" + sys.argv[1]
 SID = SESSION_ID.removeprefix("devin-")
 OUT, KEEP = os.path.expanduser("~/.cache/session-context"), 5
@@ -90,16 +95,20 @@ if suspect:
 
 last = events[-1]
 src = last.get("per_source_context_bytes", {})
-rest = last["current_context_bytes"] - sum(src.values())
+named_bytes = sum(src.values())
+rest = B[-1] - named_bytes
+other_context = "Other context (e.g. conversation and tool activity)"
 gap = round(T[-1] - B[-1] / 4)
-print(f"\nBreakdown at step {n_ev}:\n\n| Source | Bytes | ≈Tokens (B/4) |\n|---|---|---|")
+print(f"\nContext byte breakdown at step {n_ev} ({B[-1]:,} bytes):\n\n| Source | Bytes | Share of context bytes |\n|---|---|---|")
 for k, v in sorted(src.items(), key=lambda kv: -kv[1]):
-    print(f"| {k} | {v:,} | {v//4:,} |")
-if rest >= 0:
-    print(f"| bytes outside named sources | {rest:,} | {rest//4:,} |")
-else:
+    share = byte_share(v, B[-1]) if rest >= 0 else "—"
+    print(f"| {k} | {v:,} | {share} |")
+if rest > 0:
+    print(f"| {other_context} | {rest:,} | {byte_share(rest, B[-1])} |")
+    print("\nOther context is the byte remainder after subtracting named sources.")
+elif rest < 0:
     print(f"\nNamed source bytes exceed total context bytes by {-rest:,}.")
-print(f"\nUnattributed token gap (logged tokens − bytes/4): first {T[0] - B[0] / 4:+,.0f}, step {n_ev} {gap:+,}.")
+print(f"\nByte-to-token estimate difference (logged tokens − bytes/4): first {T[0] - B[0] / 4:+,.0f}, step {n_ev} {gap:+,}.")
 
 rule_sizes = [e.get("per_source_context_bytes", {}).get("rules", 0) for e in events]
 rule_changes = [(i + 1, current, current - previous)
@@ -119,7 +128,7 @@ def nice(v):
     return next(f * m for f in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) if f * m >= v)
 
 C = {"total": "#0F172A", "normal": "#6366F1", "tools": "#F59E0B", "drop": "#10B981", "suspect": "#EF4444",
-     "other": "#0EA5E9", "gap": "#F59E0B", "memory": "#D946EF", "rules": "#0F766E", "sysprompt": "#334155", "summary": "#10B981",
+     "other": "#0EA5E9", "memory": "#D946EF", "rules": "#0F766E", "sysprompt": "#334155", "summary": "#10B981",
      "acu": "#DB2777", "acu_total": "#9D174D"}
 INK, MUTED, GRID, W, P = "#0F172A", "#64748B", "#E2E8F0", 960, 70
 out = []
@@ -204,37 +213,47 @@ if acu_axis_points:
         out.append(f'<path d="M {x:.1f},{y-4:.1f} l 4,4 -4,4 -4,-4 z" fill="{C["acu_total"]}"><title>{utc_time(t)} UTC: {amount:.2f} ACUs (session total when fetched)</title></path>')
         text(x - 8, y + 4, f"{amount:.2f} ACUs", 11, C["acu_total"], "end", "600")
 
-other_src = {k: v for k, v in src.items() if k not in ("memory_drive", "rules", "sysprompt", "compaction")}
-fixed = sorted(((k, v // 4) for k, v in other_src.items()), key=lambda kv: -kv[1])
-fixed_total = sum(v for _, v in fixed)
-parts = fixed[:4] + ([(f"{len(fixed[4:])} smaller fixed sources", sum(v for _, v in fixed[4:]))] if fixed[4:] else [])
+other_named = sorted(((k, v) for k, v in src.items() if k not in ("memory_drive", "rules", "sysprompt", "compaction")),
+                     key=lambda kv: -kv[1])
+other_total = sum(v for _, v in other_named)
+parts = other_named[:4]
+if len(other_named) > 4:
+    parts.append((f"{len(other_named) - 4} smaller sources", sum(v for _, v in other_named[4:])))
 GREYS = ["#64748B", "#94A3B8", "#B4BECB", "#CBD5E1", "#E2E8F0"]
-mem, rules, sp, sm = (src.get(key, 0) // 4 for key in ("memory_drive", "rules", "sysprompt", "compaction"))
-source_rows = [("unnamed context", max(rest, 0) // 4, C["other"]), ("unattributed token gap", gap, C["gap"]),
+mem, rules, sp, sm = (src.get(key, 0) for key in ("memory_drive", "rules", "sysprompt", "compaction"))
+source_rows = [(other_context, max(rest, 0), C["other"]),
                ("summary of earlier context (compaction)", sm, C["summary"]), ("system prompt", sp, C["sysprompt"]),
                ("memory", mem, C["memory"]), ("rules (all sources)", rules, C["rules"])]
 segs = [row for row in source_rows if row[1] > 0]
 segs += [(lab, v, GREYS[j]) for j, (lab, v) in enumerate(parts) if v > 0]
-total = max(sum(v for _, v, _ in segs), 1)
-pct = lambda v: "<1%" if 0 < 100 * v / total < 0.5 else f"{100 * v / total:.0f}%"
+total = max(1, B[-1], named_bytes)
 top2, bh, bwid = top1 + h1 + 90, 44, W - 2 * P
-text(P, top2 - 26, f"Estimated source breakdown at step {n_ev} ({T[-1]:,} logged tokens)", 18, INK, weight="600")
+text(P, top2 - 32, f"Context bytes by source at step {n_ev}", 18, INK, weight="600")
+caption = f"{B[-1]:,} total context bytes"
+if rest < 0:
+    caption += f". Named sources sum to {named_bytes:,} bytes. Shares use that sum."
+elif rest > 0:
+    caption += ". Other context is the remainder after subtracting named sources."
+text(P, top2 - 12, caption)
 x, fx = P, None
 for lab, v, col in segs:
     w = bwid * v / total
-    out.append(f'<rect x="{x:.1f}" y="{top2}" width="{max(w - 1, 0.5):.1f}" height="{bh}" fill="{col}"><title>{esc(lab)}: {v:,} tokens ({esc(pct(v))})</title></rect>')
+    share = byte_share(v, total)
+    out.append(f'<rect x="{x:.1f}" y="{top2}" width="{max(w - 1, 0.5):.1f}" height="{bh}" fill="{col}"><title>{esc(lab)}: {v:,} bytes ({esc(share)})</title></rect>')
     if col not in GREYS:
-        if w > 34: text(x + w / 2, top2 + bh / 2 + 4, pct(v), 12, "#FFFFFF", "middle", "600")
+        if w > 34: text(x + w / 2, top2 + bh / 2 + 4, share, 12, "#FFFFFF", "middle", "600")
     elif fx is None: fx = x
     x += w
-if fx is not None and x - fx > 34: text((fx + x) / 2, top2 + bh / 2 + 4, pct(fixed_total), 12, INK, "middle", "600")
-rows = [(col, lab, v) for lab, v, col in source_rows if col != C["summary"] or v]
-rows += [(None, "other named sources", fixed_total)] + [(GREYS[j], "    " + lab, v) for j, (lab, v) in enumerate(parts)]
+if fx is not None and x - fx > 34: text((fx + x) / 2, top2 + bh / 2 + 4, byte_share(other_total, total), 12, INK, "middle", "600")
+rows = [(col, lab, v) for lab, v, col in source_rows if v > 0]
+if other_total:
+    rows += [(None, "Other named sources", other_total)]
+    rows += [(GREYS[j], "    " + lab, v) for j, (lab, v) in enumerate(parts) if v > 0]
 for i, (col, lab, v) in enumerate(rows):
     y = top2 + bh + 28 + i * 22
     ind = 16 if lab.startswith("    ") else 0
     if col: out.append(f'<rect x="{P + ind}" y="{y-10}" width="12" height="12" rx="2" fill="{col}"/>')
-    value = f"{v:,} ({pct(v)})" if v >= 0 else f"{v:,}"
+    value = f"{v:,} bytes ({byte_share(v, total)})"
     text(P + ind + (18 if col else 0), y, f"{lab.strip()}: {value}", 12, INK, weight="400" if col else "600")
 H = top2 + bh + 28 + len(rows) * 22 + 10
 svg = (f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}" '

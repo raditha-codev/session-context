@@ -1,6 +1,6 @@
 ---
 name: session-context-analysis
-description: "Measure a Devin session's context window: token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs over time, with a colour-coded SVG chart, from the session's context_growth_update events."
+description: "Measure a Devin session's logged context growth, source sizes, tool output and ACUs over time, with an interactive HTML chart."
 ---
 
 # Session context analysis
@@ -10,68 +10,117 @@ Use when asked how big a session's context is, what fills it, or why it grew. Wo
 ## Steps
 
 1. Get the session ID (`devin-...`; for the current session use the `devin_id` from your identity block).
-2. **Fetch** with `scripted_tools`: run the script below inline, replacing `SESSION_ID`. It saves the events to `~/.cache/session-context/session-context-<id>.json` and prints only a count, so raw events never enter your context. (`scripted_tools` only allows tool calls in inline code, which is why this part stays here.)
-3. **Analyse** with `exec`; the analysis code ships next to this file and is not read into context:
+2. **Fetch** with `scripted_tools`. Run the JavaScript below inline with `SESSION_ID` set to the target session. It saves the events to `~/.cache/session-context/session-context-<id>.json` and prints only the counts and path.
+3. **Analyse** with `exec`. Replace `<skill-base-directory>` with the base directory shown when you invoked this skill.
 
    ```bash
-   python3 "$(find /opt/.devin/plugins_cache -path '*skills/session-context-analysis/analyze.py' -printf '%T@ %p\n' | sort -nr | head -1 | cut -d' ' -f2-)" <session-id>
+   python3 "<skill-base-directory>/analyze.py" "<session-id>"
    ```
 
    It prints Markdown tables (for sessions over 30 steps, only notable steps), writes the full report and chart to `~/.cache/session-context/session-context-<id>.md` and `.html` (an SVG chart wrapped in HTML so hover tooltips work in the sidebar). It keeps files for only the 5 most recently analysed sessions and deletes older ones. Do not `cat` analyze.py.
 4. Send the tables in `message_user` and attach only the .html chart (it opens in the sidebar and shows exact counts on hover). Attach nothing else: no .md, .json, PNG or screenshot. Add the accuracy caveats below and label measured vs inferred numbers. Read the .md only if the user asks about a step that was left out.
-5. Before explaining a spike or drop, read the step's Note and "Tools called" columns. Never call a drop a summary, or a jump a tool load, unless the script labels it so.
+5. Before explaining a spike or drop, check the logged deltas and the tools called. Qualify the cause if telemetry only shows a correlation.
 
 ## Fetch script
 
-```python
-import json, re, os
-from datetime import datetime, timezone
-SESSION_ID = "devin-REPLACE_ME"
-ids, after = [], None
-while True:
-    kw = dict(action="list", session_id=SESSION_ID, event_types=["context_growth_update"], first=100)
-    if after: kw["after"] = after
-    page = await tools.devin_session_events(**kw)
-    ids += re.findall(r"^\[(event-[0-9a-z]+)\]", page, re.M)
-    m = re.search(r"after=(\S+?)\s", page)
-    if not m: break
-    after = m.group(1)
-events = []
-for i in range(0, len(ids), 20):  # details accepts at most 20 ids
-    r = await tools.devin_session_events(action="details", session_id=SESSION_ID, event_ids=ids[i:i+20], max_content_length=50000)
-    events += [json.loads(b) for b in re.findall(r"contents: (\{.*?\n\})", r, re.S)]
-page = await tools.devin_session_events(action="list", session_id=SESSION_ID, event_types=["acu_consumption_at_last_user_interaction"], first=100)
-acu_ids = re.findall(r"^\[(event-[0-9a-z]+)\]", page, re.M)
-acu_points = []
-for i in range(0, len(acu_ids), 20):
-    r = await tools.devin_session_events(action="details", session_id=SESSION_ID, event_ids=acu_ids[i:i+20], max_content_length=3000)
-    acu_points += [[b["timestamp"], b["amount"]] for b in map(json.loads, re.findall(r"contents: (\{.*?\n\})", r, re.S))]
-fetched_at = datetime.now(timezone.utc).isoformat()
-info = await tools.devin_session_interact(action="get", session_id=SESSION_ID)
-acus = re.search(r"acus_consumed: ([\d.]+)", info)
-os.makedirs(os.path.expanduser("~/.cache/session-context"), exist_ok=True)
-path = os.path.expanduser(f"~/.cache/session-context/session-context-{SESSION_ID.removeprefix('devin-')}.json")
-json.dump({"events": events, "acus": float(acus.group(1)) if acus else None, "acu_points": acu_points, "fetched_at": fetched_at}, open(path, "w"))
-print(f"{len(events)} snapshots saved to {path}")
+```javascript
+const { mkdir, rename, rm, writeFile } = await import("node:fs/promises");
+const { homedir } = await import("node:os");
+const { join } = await import("node:path");
+const { randomUUID } = await import("node:crypto");
+
+const SESSION_ID = "devin-REPLACE_ME";
+const sessionKey = SESSION_ID.replace(/^devin-/, "");
+if (!/^[a-f0-9]{32}$/i.test(sessionKey)) throw new Error("Expected a Devin session ID.");
+
+function resultText(response) {
+  const result = response.structuredContent?.result ?? response.content?.[0]?.text;
+  if (response.isError || typeof result !== "string") throw new Error("Could not read session telemetry.");
+  return result;
+}
+
+async function fetchEvents(type) {
+  const ids = new Set();
+  const cursors = new Set();
+  let after;
+  do {
+    const page = resultText(await tools.devin_session_events({
+      action: "list", session_id: SESSION_ID, event_types: [type], first: 100,
+      ...(after ? { after } : {}),
+    }));
+    if (page.startsWith("No events found for this session")) break;
+
+    const pageIds = [...page.matchAll(/^\[(event-[a-z0-9-]+)\]/gm)].map(match => match[1]);
+    const count = page.match(/^Showing (\d+)\b/);
+    if (!count || Number(count[1]) !== pageIds.length) throw new Error("Incomplete list of " + type + " events.");
+    for (const id of pageIds) ids.add(id);
+
+    after = page.match(/^More results available\. Pass after=(\S+)/m)?.[1];
+    if ((page.includes("More results available.") && !after) || cursors.has(after)) {
+      throw new Error("Invalid pagination cursor for " + type + " events.");
+    }
+    if (after) cursors.add(after);
+  } while (after);
+
+  const eventIds = [...ids];
+  const events = [];
+  for (let i = 0; i < eventIds.length; i += 20) {
+    const batch = eventIds.slice(i, i + 20);
+    const details = resultText(await tools.devin_session_events({
+      action: "details", session_id: SESSION_ID, event_ids: batch, max_content_length: 50000,
+    }));
+    const blocks = details.split(/^--- (event-[a-z0-9-]+) ---\r?$/m);
+    const parsed = new Map();
+    for (let j = 1; j < blocks.length; j += 2) {
+      const block = blocks[j + 1];
+      const marker = block.match(/^  contents:[ \t]*/m);
+      if (!marker) continue;
+      const event = JSON.parse(block.slice(marker.index + marker[0].length));
+      if (event.type === type) parsed.set(blocks[j], event);
+    }
+    for (const id of batch) {
+      if (!parsed.has(id)) throw new Error("Missing " + type + " details for " + id + ".");
+      events.push(parsed.get(id));
+    }
+  }
+  return events;
+}
+
+const [events, acuEvents] = await Promise.all([
+  fetchEvents("context_growth_update"),
+  fetchEvents("acu_consumption_at_last_user_interaction"),
+]);
+const info = resultText(await tools.devin_session_interact({ action: "get", session_id: SESSION_ID }));
+const total = info.match(/^[ \t]*acus_consumed:[ \t]*(\S+)/m);
+const acus = total ? Number(total[1]) : null;
+if (total && !Number.isFinite(acus)) throw new Error("Invalid session ACU total.");
+const fetched_at = new Date().toISOString();
+const acu_points = acuEvents.map(({ timestamp, amount }) => [timestamp, amount]);
+
+const cache = join(homedir(), ".cache", "session-context");
+await mkdir(cache, { recursive: true, mode: 0o700 });
+const path = join(cache, "session-context-" + sessionKey + ".json");
+const temp = join(cache, "." + sessionKey + "-" + randomUUID() + ".tmp");
+try {
+  await writeFile(temp, JSON.stringify({ events, acus, acu_points, fetched_at }), { mode: 0o600 });
+  await rename(temp, path);
+} finally {
+  await rm(temp, { force: true });
+}
+text(events.length + " context snapshots and " + acu_points.length + " ACU readings saved to " + path);
 ```
 
 ## Reading the output
 
-- One `context_growth_update` event is logged after each agent step; a row is the context going into the next step.
-- `current_context_tokens` is the total context; how it is counted is undocumented, so call it "logged", not "exact". It can be wrong for a single step.
-- **Anomalous reading (red dashed line):** tokens jump >10k with no matching byte growth, then fall back at the next step while bytes keep growing. Treat it as a bad reading, not real content. The script replaces it with the average of its neighbours, so the next step's Δ is not a false drop. Report the logged value, but don't explain it as tool loading or summarising.
-- **Drop (green dashed marker, labelled with the Δ):** the per-step axis starts at 0, so drops are markers, not negative bars. A drop counts as a summary or trim only when bytes also fell. If tokens fell while bytes grew, it is a recount and nothing was removed.
-- **Tool search (amber):** used only when `__tool_search__` was called at that step or the one before. Each loaded tool costs roughly 1-3k tokens for the rest of the session. A large Δ tokens with small Δ bytes and no tool search stays indigo, with a note.
-- "Tools called" lists the calls made since the previous snapshot. Use it to say which step did what.
-- Byte counts are exact. Per-tool and per-source tokens are just bytes / 4 (`approx_ant_tokens`).
-- `tool_aggregates` also counts tool calls made inside `scripted_tools`, whose output never entered the context; compare with the Δ bytes column before blaming a tool. Image outputs (e.g. `view_image`) show few bytes but real tokens.
-- Tool definitions are counted in tokens but not in bytes. The "unitemised" figure estimates them; it also absorbs bytes/4 error on JSON and code, so it drifts up over long sessions. Treat it as an upper bound. It is taken from the last non-anomalous step.
-- Bottom chart: one stacked bar of the context at the last normal step. Sky blue = conversation + tool I/O, amber = tool-definition estimate, green = summary of earlier context (`compaction`, shown only after a summary), dark slate = system prompt, fuchsia = memory (`memory_drive`), dark teal = AGENTS.md + repo rules, greys = the four largest other fixed sources plus one segment for the rest, each with its own legend row under "fixed overhead".
-- **AGENTS.md and repo rules** have no source field of their own; they are counted under `rules` together with plugin and org rules. The script treats `rules` present at the first snapshot as "rules (at start)" and anything added later as "AGENTS.md + repo rules", and lists each load. A load is the file size plus about 150 B of wrapper. To name the file, compare the load sizes with the repo's `AGENTS.md`, `.devin/rules/`, `.windsurf/rules/` and similar files (e.g. `gh api "repos/<owner>/<repo>/git/trees/HEAD?recursive=1" --jq '.tree[] | "\(.path) \(.size)"'`). If the repo was opened before the first snapshot, its AGENTS.md sits in "rules (at start)"; say so. When nothing was loaded, the segment stays in the legend at 0. If the session did repo work (guessed from git tools being called), the script also prints an advisory to add an AGENTS.md and repo rules; pass it on to the user. If you know the guess is wrong (e.g. repo work done only through `exec`), re-run with `--repo` or `--no-repo` after the session ID. Shares under 0.5% show as "<1%".
-- Top chart: bars = tokens added at each step (first step shown as the 'start' value); dark line = running total on the right axis. The left axis is a per-step change and starts at 0; drops are dashed markers.
-- **ACUs (pink line, far-right axis):** the running ACU total from `acu_consumption_at_last_user_interaction` events, one point per user message, plus a last point for the total when fetched. Points are placed by time between the step positions. Usage between user messages isn't logged, so the line joins the points; don't read per-step ACU cost from it. Hover a point for its time, total and change. Older sessions may have no ACU events; the line is then left out.
-- Speed per step is in `iteration_stats` events (ttft_ms, inference_ms, tool_exec_ms) if the user asks about latency.
-- For dollar figures from ACUs, invoke the `reporting-devin-costs` skill first.
+- A `context_growth_update` snapshot records the context after a step. The chart and table use the logged `current_context_tokens` and deltas between consecutive snapshots. The start label shows the first snapshot, and dashed markers show token drops.
+- **Possible anomalous reading (red).** A spike over 10,000 tokens that nearly reverts at the next snapshot while bytes stay steady or rise can be a measurement anomaly. The chart keeps the logged readings and flags the affected deltas.
+- **Token drop (green).** Check the change in bytes and the `compaction` source before describing a drop. Report the observed changes and qualify any inference about what caused them.
+- **Tool search nearby (amber).** Token growth exceeded twice the byte-based estimate and a tool search occurred at that step or the previous one. Treat the search as a clue about timing.
+- **Tool output.** The table ranks tools by logged output bytes. Aggregates can include nested `scripted_tools` calls, and image output can use tokens with few reported bytes. Use context deltas and the step's tool calls to investigate growth.
+- **Source breakdown.** The last snapshot's source byte counts are logged. Byte-based token estimates use bytes / 4. The signed unattributed token gap is the difference between the logged total and the byte-based estimate. It can reflect tool definitions, images or approximation error.
+- **Rules.** The `rules` source combines repository, plugin and other rules. The table shows changes to that aggregate. Name an individual source only if another event identifies it.
+- **ACUs.** Historical readings are plotted in pink. Joining the readings helps track their order in time. Deltas describe intervals between readings. The session total when fetched is a separate diamond without an interval delta. Some sessions have no historical readings.
+- For step latency, check `iteration_stats` events (`ttft_ms`, `inference_ms`, `tool_exec_ms`). For dollar figures from ACUs, invoke the `reporting-devin-costs` skill first.
 
 ## Limits
 

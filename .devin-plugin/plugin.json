@@ -1,6 +1,6 @@
 {
   "name": "session-context-analysis",
-  "version": "0.3.6",
-  "description": "Analyse a Devin session's context-window growth and sources, with an SVG chart.",
+  "version": "0.3.7",
+  "description": "Analyse a Devin session's logged context growth and ACUs with an interactive HTML chart.",
   "platforms": ["cloud"]
 }

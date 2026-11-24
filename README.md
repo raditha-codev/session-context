@@ -1,12 +1,12 @@
 # session-context
 
-Devin plugin `session-context-analysis`: measures a Devin session's context window (token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs over time) and draws a colour-coded SVG chart (wrapped in HTML, with hover tooltips) from the session's `context_growth_update` and `acu_consumption_at_last_user_interaction` events.
+Devin plugin `session-context-analysis` charts a session's logged context tokens, source byte counts, tool output sizes, and ACUs. The interactive HTML chart uses context snapshots and historical ACU events and marks the current session ACU total separately.
 
 ## Layout
 
 - `.devin-plugin/plugin.json` – plugin manifest
-- `skills/session-context-analysis/SKILL.md` – skill instructions, including the inline fetch script for `scripted_tools`
-- `skills/session-context-analysis/analyze.py` – analysis script: `python3 analyze.py <session-id> [--repo | --no-repo]`
+- `skills/session-context-analysis/SKILL.md` – skill instructions and inline JavaScript fetcher for `scripted_tools`
+- `skills/session-context-analysis/analyze.py` – analysis script, run with `python3 analyze.py <session-id>`
 
 ## Install
 

@@ -1,6 +1,6 @@
 ---
 name: session-context-analysis
-description: "Measure a Devin session's context window: token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs, with a colour-coded SVG bar chart, from the session's context_growth_update events."
+description: "Measure a Devin session's context window: token growth per step, per-source breakdown, biggest tools, tool-definition overhead and ACUs over time, with a colour-coded SVG chart, from the session's context_growth_update events."
 ---
 
 # Session context analysis
@@ -25,6 +25,7 @@ Use when asked how big a session's context is, what fills it, or why it grew. Wo
 
 ```python
 import json, re, os
+from datetime import datetime, timezone
 SESSION_ID = "devin-REPLACE_ME"
 ids, after = [], None
 while True:
@@ -39,10 +40,17 @@ events = []
 for i in range(0, len(ids), 20):  # details accepts at most 20 ids
     r = await tools.devin_session_events(action="details", session_id=SESSION_ID, event_ids=ids[i:i+20], max_content_length=50000)
     events += [json.loads(b) for b in re.findall(r"contents: (\{.*?\n\})", r, re.S)]
+page = await tools.devin_session_events(action="list", session_id=SESSION_ID, event_types=["acu_consumption_at_last_user_interaction"], first=100)
+acu_ids = re.findall(r"^\[(event-[0-9a-z]+)\]", page, re.M)
+acu_points = []
+for i in range(0, len(acu_ids), 20):
+    r = await tools.devin_session_events(action="details", session_id=SESSION_ID, event_ids=acu_ids[i:i+20], max_content_length=3000)
+    acu_points += [[b["timestamp"], b["amount"]] for b in map(json.loads, re.findall(r"contents: (\{.*?\n\})", r, re.S))]
+fetched_at = datetime.now(timezone.utc).isoformat()
 info = await tools.devin_session_interact(action="get", session_id=SESSION_ID)
 acus = re.search(r"acus_consumed: ([\d.]+)", info)
 path = os.path.expanduser(f"~/session-context-{SESSION_ID.removeprefix('devin-')}.json")
-json.dump({"events": events, "acus": float(acus.group(1)) if acus else None}, open(path, "w"))
+json.dump({"events": events, "acus": float(acus.group(1)) if acus else None, "acu_points": acu_points, "fetched_at": fetched_at}, open(path, "w"))
 print(f"{len(events)} snapshots saved to {path}")
 ```
 
@@ -60,6 +68,7 @@ print(f"{len(events)} snapshots saved to {path}")
 - Bottom chart: one stacked bar of the context at the last normal step. Sky blue = conversation + tool I/O, amber = tool-definition estimate, green = summary of earlier context (`compaction`, shown only after a summary), dark slate = system prompt, fuchsia = memory (`memory_drive`), dark teal = AGENTS.md + repo rules, greys = the four largest other fixed sources plus one segment for the rest, each with its own legend row under "fixed overhead".
 - **AGENTS.md and repo rules** have no source field of their own; they are counted under `rules` together with plugin and org rules. The script treats `rules` present at the first snapshot as "rules (at start)" and anything added later as "AGENTS.md + repo rules", and lists each load. A load is the file size plus about 150 B of wrapper. To name the file, compare the load sizes with the repo's `AGENTS.md`, `.devin/rules/`, `.windsurf/rules/` and similar files (e.g. `gh api "repos/<owner>/<repo>/git/trees/HEAD?recursive=1" --jq '.tree[] | "\(.path) \(.size)"'`). If the repo was opened before the first snapshot, its AGENTS.md sits in "rules (at start)"; say so. When nothing was loaded, the segment stays in the legend at 0. If the session did repo work (guessed from git tools being called), the script also prints an advisory to add an AGENTS.md and repo rules; pass it on to the user. If you know the guess is wrong (e.g. repo work done only through `exec`), re-run with `--repo` or `--no-repo` after the session ID. Shares under 0.5% show as "<1%".
 - Top chart: bars = tokens added at each step (first step shown as the 'start' value); dark line = running total on the right axis. The left axis is a per-step change and starts at 0; drops are dashed markers.
+- **ACUs (pink line, far-right axis):** the running ACU total from `acu_consumption_at_last_user_interaction` events, one point per user message, plus a last point for the total when fetched. Points are placed by time between the step positions. Usage between user messages isn't logged, so the line joins the points; don't read per-step ACU cost from it. Hover a point for its time, total and change. Older sessions may have no ACU events; the line is then left out.
 - Speed per step is in `iteration_stats` events (ttft_ms, inference_ms, tool_exec_ms) if the user asks about latency.
 - For dollar figures from ACUs, invoke the `reporting-devin-costs` skill first.
 

@@ -6,6 +6,7 @@ Prints Markdown tables (step table trimmed to notable steps for long sessions),
 writes the full report to ~/session-context-<id>.md and the chart to ~/session-context-<id>.svg.
 """
 import json, math, os, sys
+from datetime import datetime, timezone
 from html import escape as esc
 
 SESSION_ID = sys.argv[1] if sys.argv[1].startswith("devin-") else "devin-" + sys.argv[1]
@@ -58,6 +59,15 @@ for i, e in enumerate(events):
     notable = n_ev <= 30 or i in (0, n_ev - 1) or bool(note) or abs(dt) >= max(2000, 0.05 * max(T))
     print(f"| {i+1} | {e['timestamp'][11:19]} | {T[i]:,} | {dt:+,} | {B[i]:,} | {db:+,} | {', '.join(f'{k}×{v}' for k, v in newc.items())} | {note} |", brief=notable)
 if n_ev > 30: print(f"\n(Only notable steps shown; all {n_ev} steps are in ~/session-context-{SID}.md.)")
+# ACU series: running total logged at each user message, plus the total at fetch time.
+ts = lambda s: datetime.fromisoformat(s.replace("Z", "+00:00")).timestamp()
+acu_pts = sorted((ts(t), a) for t, a in data.get("acu_points", []))
+acu_now = acus is not None and bool(data.get("fetched_at")) and (not acu_pts or ts(data["fetched_at"]) > acu_pts[-1][0])
+if acu_now: acu_pts.append((ts(data["fetched_at"]), acus))
+if acu_pts:
+    print(f"\nACUs (running total at each user message{'; last row is the total when fetched' if acu_now else ''}):\n\n| Time (UTC) | ACUs | Δ ACUs |\n|---|---|---|", brief=len(acu_pts) <= 20)
+    for j, (t, a) in enumerate(acu_pts):
+        print(f"| {datetime.fromtimestamp(t, timezone.utc):%H:%M:%S} | {a:.2f} | {a - (acu_pts[j-1][1] if j else 0):+.2f} |", brief=len(acu_pts) <= 20)
 if glitch: print(f"\nAnomalous token readings at step(s) {', '.join(str(i+1) for i in sorted(glitch))}: excluded from deltas, totals and chart.")
 
 li = max(i for i in range(n_ev) if i not in glitch)
@@ -102,7 +112,7 @@ def nice(v):
     return next(f * m for f in (1, 1.2, 1.5, 2, 2.5, 3, 4, 5, 6, 8, 10) if f * m >= v)
 
 C = {"total": "#0F172A", "normal": "#6366F1", "tools": "#F59E0B", "shrink": "#10B981", "recount": "#10B981", "glitch": "#EF4444",
-     "fixed": "#94A3B8", "conversation": "#0EA5E9", "tooldefs": "#F59E0B", "memory": "#D946EF", "reporules": "#0F766E", "sysprompt": "#334155", "summary": "#10B981"}
+     "fixed": "#94A3B8", "conversation": "#0EA5E9", "tooldefs": "#F59E0B", "memory": "#D946EF", "reporules": "#0F766E", "sysprompt": "#334155", "summary": "#10B981", "acu": "#DB2777"}
 INK, MUTED, GRID, W, P = "#0F172A", "#64748B", "#E2E8F0", 960, 70
 out = []
 def text(x, y, s, size=12, fill=MUTED, anchor="start", weight="normal"):
@@ -110,9 +120,11 @@ def text(x, y, s, size=12, fill=MUTED, anchor="start", weight="normal"):
 def legend(y, items):
     x = P
     for k, lab in items:
+        if x + 18 + 6.2 * len(lab) > W - 10: x, y = P, y + 20
         out.append(f'<rect x="{x}" y="{y-10}" width="12" height="12" rx="2" fill="{C[k]}"/>'); text(x + 18, y, lab); x += 34 + 6.2 * len(lab)
+    return y
 
-h1, top1, PR = 300, 70, 70
+h1, top1, PR = 300, 70, (130 if acu_pts else 70)
 def k(v): return f"{v/1000:g}k" if v else "0"
 bars = steps[1:] or steps
 # The per-step axis starts at 0; drops (summary/recount) are drawn as labelled dashed markers, not negative bars.
@@ -124,17 +136,20 @@ N = round((dmax - dmin) / dstep)
 tmax = nice(max(s[1] for s in steps) * 1.05 / N) * N
 yd = lambda v: top1 + h1 * (dmax - v) / (dmax - dmin)
 yt = lambda v: top1 + h1 * (1 - v / tmax)
-text(P, 32, f"Tokens added per step — {SESSION_ID[-8:]}", 18, INK, weight="600")
+text(P, 32, f"Tokens added per step{' and ACUs' if acu_pts else ''} — {SESSION_ID[-8:]}", 18, INK, weight="600")
 leg = [("normal", "added this step"), ("tools", "tool search"), ("shrink", "drop: summary / recount (dashed)")]
 if glitch: leg.append(("glitch", "anomalous reading (excluded)"))
-legend(54, leg + [("total", "total (right axis)")])
+top1 += legend(54, leg + [("total", "total (right axis)")] + ([("acu", "ACUs (far-right axis)")] if acu_pts else [])) - 54
+if acu_pts: amax = nice(max(max(a for _, a in acu_pts), 0.01) * 1.05 / N) * N
 for i in range(N + 1):
     y = top1 + h1 - h1 * i / N
     out.append(f'<line x1="{P}" x2="{W-PR}" y1="{y:.1f}" y2="{y:.1f}" stroke="{GRID}"/>')
     text(P - 8, y + 4, k(dmin + dstep * i), 11, anchor="end")
     text(W - PR + 8, y + 4, k(tmax * i / N), 11, INK)
+    if acu_pts: text(W - PR + 60, y + 4, f"{amax * i / N:g}", 11, C["acu"])
 if dmin < 0: out.append(f'<line x1="{P}" x2="{W-PR}" y1="{yd(0):.1f}" y2="{yd(0):.1f}" stroke="{MUTED}"/>')
 text(P - 8, top1 - 12, "Δ tokens", 11, anchor="end"); text(W - PR + 8, top1 - 12, "total", 11, INK)
+if acu_pts: text(W - PR + 60, top1 - 12, "ACUs", 11, C["acu"])
 n = len(bars); bw = (W - PR - P) / n; pts = []
 for j, (idx, tot, dt, kind, raw) in enumerate(bars):
     x = P + j * bw + bw * 0.15; cx = x + bw * 0.35
@@ -156,6 +171,22 @@ out.append(f'<circle cx="{lx:.1f}" cy="{ly:.1f}" r="3.5" fill="{C["total"]}"/>')
 text(lx - 6, ly - 8, f"{steps[-1][1]:,}", 11, INK, "end", "600")
 text(P + 6, top1 + 14, f"start: {steps[0][1]:,} tokens", 11, MUTED)
 text((P + W - PR) / 2, top1 + h1 + 36, "Step", 12, anchor="middle")
+if acu_pts:
+    # Place each ACU reading by time, interpolating between the step positions on the x axis.
+    tx = [(ts(events[0]["timestamp"]), float(P))] + [(ts(events[idx - 1]["timestamp"]), cx) for (idx, *_), (cx, _) in zip(bars, pts)]
+    if acu_pts[-1][0] > tx[-1][0]: tx.append((acu_pts[-1][0], float(W - PR)))
+    def xat(t):
+        if t <= tx[0][0]: return tx[0][1]
+        for (t0, x0), (t1, x1) in zip(tx, tx[1:]):
+            if t <= t1: return x0 + (x1 - x0) * (t - t0) / max(t1 - t0, 1e-9)
+        return tx[-1][1]
+    ya = lambda a: top1 + h1 * (1 - a / amax)
+    ap = [(xat(t), ya(a)) for t, a in acu_pts]
+    out.append(f'<polyline points="{" ".join(f"{a:.1f},{b:.1f}" for a, b in ap)}" fill="none" stroke="{C["acu"]}" stroke-width="2" stroke-linejoin="round"/>')
+    for j, ((x, y), (t, a)) in enumerate(zip(ap, acu_pts)):
+        lab = "total when fetched" if j == len(ap) - 1 and acu_now else "user message"
+        out.append(f'<circle cx="{x:.1f}" cy="{y:.1f}" r="3.5" fill="{C["acu"]}"><title>{datetime.fromtimestamp(t, timezone.utc):%H:%M:%S} UTC ({lab}): {a:.2f} ACUs ({a - (acu_pts[j-1][1] if j else 0):+.2f})</title></circle>')
+    text(ap[-1][0] - 8, ap[-1][1] + 4, f"{acu_pts[-1][1]:.2f} ACUs", 11, C["acu"], "end", "600")
 
 other_src = {k: v for k, v in src.items() if k not in ("memory_drive", "rules", "sysprompt", "compaction")}
 if rules_start: other_src["rules (at start)"] = rules_start

@@ -1,0 +1,9 @@
+#!/bin/sh
+# Adds the repo's required Co-authored-by trailers to every commit message.
+for coauthor in \
+  "Devin AI <158243242+devin-ai-integration[bot]@users.noreply.github.com>" \
+  "Raditha Dissanayake <raditha@codevlabs.ai>"
+do
+  git interpret-trailers --in-place --if-exists addIfDifferent \
+    --trailer "Co-authored-by: $coauthor" "$1"
+done

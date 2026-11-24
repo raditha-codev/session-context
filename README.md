@@ -11,3 +11,11 @@ Devin plugin `session-context-analysis`: measures a Devin session's context wind
 ## Install
 
 This directory uses the Devin plugin layout (`.devin-plugin/plugin.json` + `skills/`), so it can be uploaded as a personal or org plugin. Then ask Devin to analyse a session's context.
+
+## Contributing
+
+Every commit is co-authored by Devin and Raditha Dissanayake. Enable the hook that adds the `Co-authored-by` trailers once per clone:
+
+```bash
+git config core.hooksPath .githooks
+```

@@ -91,6 +91,45 @@ class AnalyzerTest(unittest.TestCase):
         self.assertEqual(len(historical_line.get("points").split()), 2)
         self.assertIn("1.50 ACUs (session total when fetched)", "".join(svg.find("{*}path").itertext()))
 
+    def test_acu_chart_and_table_without_context_snapshots(self):
+        report, svg = analyze(
+            [],
+            acu_points=[["2026-11-25T06:29:00Z", 1.2], ["2026-11-25T08:35:21Z", 4.78]],
+            acus=5.11,
+            fetched_at="2026-11-25T08:46:00Z",
+        )
+        self.assertIn("| 2026-11-25 08:35:21 | 4.78 | +3.58 |", report)
+        self.assertNotIn("Logged tokens", report)
+        chart_text = "".join(svg.itertext())
+        self.assertIn("Context data isn't available for this session", report)
+        self.assertIn("Context data isn't available for this session", chart_text)
+        self.assertIn("Time (UTC)", chart_text)
+        self.assertNotIn("Context bytes by source", chart_text)
+        line, = svg.findall("{*}polyline")
+        self.assertEqual(line.get("stroke"), "#DB2777")
+        self.assertEqual(len(line.get("points").split()), 2)
+        self.assertIn("5.11 ACUs (session total when fetched)", "".join(svg.find("{*}path").itertext()))
+
+    def test_acu_total_without_readings_or_fetch_timestamp(self):
+        report, svg = analyze([], acus=0)
+        self.assertIn("Session ACU total when fetched: 0.00.", report)
+        self.assertIn("Fetch time unavailable", "".join(svg.itertext()))
+        self.assertIn("0.00 ACUs (session total when fetched)", "".join(svg.find("{*}path").itertext()))
+        self.assertIsNone(svg.find("{*}polyline"))
+
+    def test_readings_only_prints_full_table_without_context_snapshots(self):
+        report, svg = analyze([], acu_points=[
+            [f"2026-11-25T06:29:{second:02}Z", second] for second in range(21)
+        ])
+        self.assertIn("| 2026-11-25 06:29:20 | 20.00 | +1.00 |", report)
+        self.assertEqual(len(svg.findall("{*}circle")), 21)
+        self.assertIsNone(svg.find("{*}path"))
+
+    def test_no_chart_without_context_or_acu_data(self):
+        with self.assertRaises(SystemExit) as exit_result:
+            analyze([], acu_points=[], acus=None)
+        self.assertIsNone(exit_result.exception.code)
+
 
 if __name__ == "__main__":
     unittest.main()

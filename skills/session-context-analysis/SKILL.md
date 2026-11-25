@@ -120,11 +120,12 @@ text(events.length + " context snapshots and " + acu_points.length + " ACU readi
 - **Source breakdown.** The chart shows byte counts and byte shares at the last snapshot. Other context is the difference between total context bytes and the sum of named sources. It can include conversation and tool activity. Tool aggregates can overlap, so use them separately to rank output sizes. The text report shows the difference between logged tokens and the bytes / 4 estimate separately from the source breakdown.
 - **Rules.** The `rules` source combines repository, plugin and other rules. The table shows changes to that aggregate. Name an individual source only if another event identifies it.
 - **ACUs.** Historical readings are plotted in pink. Joining the readings helps track their order in time. Deltas describe intervals between readings. The session total when fetched is a separate diamond without an interval delta. Some sessions have no historical readings.
+- **No context snapshots.** If ACU readings or a session total are available, the report and chart show only ACU data, and the terminal prints any historical ACU readings. No context sizes are inferred.
 - For step latency, check `iteration_stats` events (`ttft_ms`, `inference_ms`, `tool_exec_ms`). For dollar figures from ACUs, invoke the `reporting-devin-costs` skill first.
 
 ## Limits
 
 - Gives sizes, not the prompt text itself.
 - Only sessions the caller can read.
-- Older sessions may lack these events; say so instead of guessing.
+- Sessions may lack context snapshots. If they also have no ACU readings or total, no report or chart is generated.
 - The events don't record why a reading is anomalous; say the cause is unknown.

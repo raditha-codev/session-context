@@ -101,8 +101,11 @@ class AnalyzerTest(unittest.TestCase):
         self.assertIn("| 2026-11-25 08:35:21 | 4.78 | +3.58 |", report)
         self.assertNotIn("Logged tokens", report)
         chart_text = "".join(svg.itertext())
-        self.assertIn("Context data isn't available for this session", report)
-        self.assertIn("Context data isn't available for this session", chart_text)
+        notice = "Context snapshots are not available for this session."
+        self.assertIn(notice, report)
+        label, = (node for node in svg.findall("{*}text") if node.text == notice)
+        self.assertEqual(label.get("font-weight"), "600")
+        self.assertIsNotNone(svg.find("{*}rect[@stroke='#F59E0B']"))
         self.assertIn("Time (UTC)", chart_text)
         self.assertNotIn("Context bytes by source", chart_text)
         line, = svg.findall("{*}polyline")

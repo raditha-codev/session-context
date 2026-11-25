@@ -22,6 +22,7 @@ def byte_share(size, total):
     return "<1%" if 0 < percent < 0.5 else f"{percent:.0f}%"
 
 
+NO_CONTEXT = "Context snapshots are not available for this session."
 SESSION_ID = sys.argv[1] if sys.argv[1].startswith("devin-") else "devin-" + sys.argv[1]
 SID = SESSION_ID.removeprefix("devin-")
 OUT, KEEP = os.path.expanduser("~/.cache/session-context"), 5
@@ -30,9 +31,8 @@ with open(f"{OUT}/session-context-{SID}.json", encoding="utf-8") as capture:
 events = sorted(data["events"], key=lambda e: ts(e["timestamp"]))
 acus = data.get("acus")
 if not events and not data.get("acu_points") and acus is None:
-    print("No context_growth_update events for this session."); sys.exit()
+    print(NO_CONTEXT); sys.exit()
 
-NO_CONTEXT = "Context data isn't available for this session (no context snapshots)."
 _full = []
 def print(s="", brief=True):
     _full.append(str(s))
@@ -210,13 +210,14 @@ if events:
                 if t <= t1: return x0 + (x1 - x0) * (t - t0) / max(t1 - t0, 1e-9)
             return tx[-1][1]
 else:
-    h1, top1, PR, N = 300, 118, 80, 5
+    h1, top1, PR, N = 300, 142, 80, 5
     text(P, 32, f"ACUs over time — {SESSION_ID[-8:]}", 18, INK, weight="600")
-    text(P, 54, NO_CONTEXT)
+    out.append(f'<rect x="{P}" y="44" width="{W-P-PR}" height="36" rx="6" fill="#FFFBEB" stroke="#F59E0B"/>')
+    text(P + 12, 67, NO_CONTEXT, 16, "#78350F", weight="600")
     leg = []
     if acu_pts: leg.append(("acu", "historical ACUs"))
     if acu_total: leg.append(("acu_total", "ACU total when fetched (diamond)"))
-    top1 += legend(78, leg) - 78
+    top1 += legend(102, leg) - 102
     amax = nice(max(max(a for _, a in acu_axis_points), 0.01) * 1.05 / N) * N
     for i in range(N + 1):
         y = top1 + h1 - h1 * i / N
